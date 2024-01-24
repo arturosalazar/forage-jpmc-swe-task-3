@@ -1,0 +1,133 @@
+From dc504c93e2e896a591d055752c4c01254a3efb4e Mon Sep 17 00:00:00 2001
+From: Arturo Salazar <arturo.v.salazar.jr@gmail.com>
+Date: Tue, 23 Jan 2024 18:58:33 -0600
+Subject: [PATCH] Update DataManipulator.ts and Graph.tsx to display ratio and
+ upper/lower bound stock data
+
+---
+ src/DataManipulator.ts | 34 ++++++++++++++++++++++++----------
+ src/Graph.tsx          | 36 +++++++++++++++++++++++-------------
+ 2 files changed, 47 insertions(+), 23 deletions(-)
+
+diff --git a/src/DataManipulator.ts b/src/DataManipulator.ts
+index 7f62295..a2af6cb 100644
+--- a/src/DataManipulator.ts
++++ b/src/DataManipulator.ts
+@@ -1,20 +1,34 @@
+ import { ServerRespond } from './DataStreamer';
+ 
++// Determines the structure of the object returned by generateRow()
+ export interface Row {
+-  stock: string,
+-  top_ask_price: number,
++  price_abc: number,
++  price_def: number,
++  ratio: number,
+   timestamp: Date,
++  upper_bound: number, 
++  lower_bound: number, 
++  trigger_alert: number | undefined,
+ }
+ 
+ 
+ export class DataManipulator {
+-  static generateRow(serverResponds: ServerRespond[]) {
+-    return serverResponds.map((el: any) => {
+-      return {
+-        stock: el.stock,
+-        top_ask_price: el.top_ask && el.top_ask.price || 0,
+-        timestamp: el.timestamp,
+-      };
+-    })
++  // Process raw server data and return row usable by Graph display
++  static generateRow(serverRespond: ServerRespond[]): Row {
++    const priceABC = (serverRespond[0].top_ask.price + serverRespond[0].top_bid.price) / 2;
++    const priceDEF = (serverRespond[1].top_ask.price + serverRespond[1].top_bid.price) / 2;
++    const ratio = priceABC / priceDEF;
++    const upperBound = 1 + 0.05;
++    const lowerBound = 1 - 0.05;
++    return {
++      price_abc: priceABC,
++      price_def: priceDEF,
++      ratio,
++      timestamp: serverRespond[0].timestamp > serverRespond[1].timestamp ?
++        serverRespond[0].timestamp : serverRespond[1].timestamp,
++      upper_bound: upperBound,
++      lower_bound: lowerBound,
++      trigger_alert: (ratio > upperBound || ratio < lowerBound) ? ratio: undefined,
++    };
+   }
+ }
+diff --git a/src/Graph.tsx b/src/Graph.tsx
+index 277797d..ae33a8c 100644
+--- a/src/Graph.tsx
++++ b/src/Graph.tsx
+@@ -1,5 +1,5 @@
+ import React, { Component } from 'react';
+-import { Table } from '@finos/perspective';
++import {Table, TableData} from '@finos/perspective';
+ import { ServerRespond } from './DataStreamer';
+ import { DataManipulator } from './DataManipulator';
+ import './Graph.css';
+@@ -22,11 +22,16 @@ class Graph extends Component<IProps, {}> {
+     // Get element from the DOM.
+     const elem = document.getElementsByTagName('perspective-viewer')[0] as unknown as PerspectiveViewerElement;
+ 
++    // Track ratio and upper/lower bounds to trigger alert
++    // Price of each stock needed for ratio
+     const schema = {
+-      stock: 'string',
+-      top_ask_price: 'float',
+-      top_bid_price: 'float',
++      price_abc: 'float',
++      price_def: 'float',
++      ratio: 'float',
+       timestamp: 'date',
++      upper_bound: 'float',
++      lower_bound: 'float',
++      trigger_alert: 'float',
+     };
+ 
+     if (window.perspective && window.perspective.worker()) {
+@@ -35,24 +40,29 @@ class Graph extends Component<IProps, {}> {
+     if (this.table) {
+       // Load the `table` in the `<perspective-viewer>` DOM reference.
+       elem.load(this.table);
+-      elem.setAttribute('view', 'y_line');
+-      elem.setAttribute('column-pivots', '["stock"]');
+-      elem.setAttribute('row-pivots', '["timestamp"]');
+-      elem.setAttribute('columns', '["top_ask_price"]');
++      elem.setAttribute('view', 'y_line'); //view - kind of graph we want to visualize data with
++      elem.setAttribute('row-pivots', '["timestamp"]'); //row-pivot - allows us to map each data point based on it's time stamp
++      //columns - allow us to focus on particular part of a data point's data along y-axis (w/o - graph plots ALL the field and values)
++      elem.setAttribute('columns', '["ratio", "lower_bound", "upper_bound", "trigger_alert"]');
++      //aggregates - lets us handle duplicate data to consolidate into one data point. 
++      // We only want to consider a data point unique if it has a time stamp. Otherwise avg the values of similar points
+       elem.setAttribute('aggregates', JSON.stringify({
+-        stock: 'distinctcount',
+-        top_ask_price: 'avg',
+-        top_bid_price: 'avg',
++        price_abc: 'avg',
++        price_def: 'avg',
++        ratio: 'avg',
+         timestamp: 'distinct count',
++        upper_bound: 'avg',
++        lower_bound: 'avg',
++        trigger_alert: 'avg'
+       }));
+     }
+   }
+ 
+   componentDidUpdate() {
+     if (this.table) {
+-      this.table.update(
++      this.table.update([
+         DataManipulator.generateRow(this.props.data),
+-      );
++      ] as unknown as TableData);
+     }
+   }
+ }
+-- 
+2.38.1.windows.1
+
